@@ -125,9 +125,17 @@ namespace Microsoft.WindowsAzure.Commands.Common.Common
             {
                 subscription.SetOrAppendProperty(AzureSubscription.Property.RegisteredResourceProviders,
                     providers.ToArray());
-                ProfileClient profileClient = new ProfileClient();
-                profileClient.AddOrSetSubscription(subscription);
-                profileClient.Profile.Save();
+                try
+                {
+                    ProfileClient profileClient = new ProfileClient();
+                    profileClient.AddOrSetSubscription(subscription);
+                    profileClient.Profile.Save();
+                }
+                catch (KeyNotFoundException)
+                {
+                    // if using a subscription data file, do not write registration to disk
+                    // long term solution is using -Profile parameter
+                }
             }
         }
     }
