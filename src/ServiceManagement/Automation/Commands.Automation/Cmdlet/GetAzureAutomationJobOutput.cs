@@ -25,20 +25,19 @@ namespace Microsoft.Azure.Commands.Automation.Cmdlet
     /// Gets azure automation variables for a given account.
     /// </summary>
     [Cmdlet(VerbsCommon.Get, "AzureAutomationJobOutput")]
-    [OutputType(typeof(JobStream))]
+    [OutputType(typeof(Variable))]
     public class GetAzureAutomationJobOutput : AzureAutomationBaseCmdlet
     {
         /// <summary>
         /// Gets or sets the job id
         /// </summary>
-        [Alias("JobId")]
-        [Parameter(Mandatory = true, Position = 0, ValueFromPipelineByPropertyName = true, HelpMessage = "The job name or Id")]
+        [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true, HelpMessage = "The job id")]
         public Guid Id { get; set; }
 
-        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, HelpMessage = "The stream type. Defaults to Any.")]
+        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, HelpMessage = "The stream type")]
         public string Stream { get; set; }
 
-        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, HelpMessage = "Retrieves output created after this time")]
+        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, HelpMessage = "The start time filter for job output")]
         public DateTime? StartTime { get; set; }
 
         /// <summary>

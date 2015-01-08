@@ -39,10 +39,11 @@ namespace Microsoft.Azure.Commands.Automation.Model
             Requires.Argument("accountName", accountName).NotNull();
 
             this.AutomationAccountName = accountName;
+            this.Name = job.Name;
             this.Location = job.Location;
             this.Type = job.Type;
             this.Tags = job.Tags ?? new Dictionary<string, string>();
-            this.Id = Guid.Parse(job.Name);
+            this.Id = job.Id;
 
             if (job.Properties == null) return;
 
@@ -71,9 +72,14 @@ namespace Microsoft.Azure.Commands.Automation.Model
         public string AutomationAccountName { get; set; }
 
         /// <summary>
-        /// Gets or sets the job id.
+        /// Gets or sets the tags.
         /// </summary>
-        public Guid Id { get; set; }
+        public string Id { get; set; }
+
+        /// <summary>
+        /// Gets or sets the name.
+        /// </summary>
+        public string Name { get; set; }
 
         /// <summary>
         /// Gets or sets the location.
