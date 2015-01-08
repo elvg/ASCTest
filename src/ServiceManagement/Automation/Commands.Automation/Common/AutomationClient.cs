@@ -27,7 +27,6 @@ using Microsoft.WindowsAzure;
 using Microsoft.WindowsAzure.Commands.Common;
 using Microsoft.WindowsAzure.Commands.Common.Models;
 using Newtonsoft.Json;
-
 using Runbook = Microsoft.Azure.Commands.Automation.Model.Runbook;
 using Schedule = Microsoft.Azure.Commands.Automation.Model.Schedule;
 using Job = Microsoft.Azure.Commands.Automation.Model.Job;
@@ -35,7 +34,6 @@ using Variable = Microsoft.Azure.Commands.Automation.Model.Variable;
 using JobStream = Microsoft.Azure.Commands.Automation.Model.JobStream;
 using Credential = Microsoft.Azure.Commands.Automation.Model.Credential;
 using Module = Microsoft.Azure.Commands.Automation.Model.Module;
-using JobSchedule = Microsoft.Azure.Commands.Automation.Model.JobSchedule;
 
 namespace Microsoft.Azure.Commands.Automation.Common
 {
@@ -135,7 +133,8 @@ namespace Microsoft.Azure.Commands.Automation.Common
             return scheduleModels.Select(scheduleModel => new Schedule(automationAccountName, scheduleModel));
         }
 
-        public Schedule UpdateSchedule(string automationAccountName, string scheduleName, bool? isEnabled, string description)
+        public Schedule UpdateSchedule(string automationAccountName, string scheduleName, bool? isEnabled,
+            string description)
         {
             AutomationManagement.Models.Schedule scheduleModel = this.GetScheduleModel(automationAccountName,
                 scheduleName);
@@ -335,6 +334,27 @@ namespace Microsoft.Azure.Commands.Automation.Common
 
         #endregion
 
+        public IEnumerable<JobStream> GetJobStream(string automationAccountName, Guid jobId, DateTime? time,
+            string streamType)
+        {
+            var listParams = new AutomationManagement.Models.JobStreamListParameters();
+
+            if (time.HasValue)
+            {
+                listParams.Time = time.Value.ToUniversalTime().ToString();
+            }
+
+            if (streamType != null)
+            {
+                listParams.StreamType = streamType;
+            }
+
+            var jobStreams =
+                this.automationManagementClient.JobStreams.List(automationAccountName, jobId, listParams).JobStreams;
+
+            return jobStreams.Select(this.CreateJobStreamFromJobStreamModel);
+        }
+
         #region Variables
 
         public Variable CreateVariable(string automationAccountName, Variable variable)
@@ -490,30 +510,38 @@ namespace Microsoft.Azure.Commands.Automation.Common
         public IEnumerable<Variable> ListVariables(string automationAccountName)
         {
             IList<AutomationManagement.Models.Variable> variables = AutomationManagementClient.ContinuationTokenHandler(
-               skipToken =>
-               {
-                   var response = this.automationManagementClient.Variables.List(
-                       automationAccountName, skipToken);
-                   return new ResponseWithSkipToken<AutomationManagement.Models.Variable>(
-                       response, response.Variables);
-               });
+                skipToken =>
+                {
+                    var response = this.automationManagementClient.Variables.List(
+                        automationAccountName, skipToken);
+                    return new ResponseWithSkipToken<AutomationManagement.Models.Variable>(
+                        response, response.Variables);
+                });
 
-            var result = variables.Select(variable => this.CreateVariableFromVariableModel(variable, automationAccountName)).ToList();
+            var result =
+                variables.Select(
+                    (variable, autoamtionAccountName) =>
+                        this.CreateVariableFromVariableModel(variable, automationAccountName)).ToList();
 
-            IList<AutomationManagement.Models.EncryptedVariable> encryptedVariables = AutomationManagementClient.ContinuationTokenHandler(
-               skipToken =>
-               {
-                   var response = this.automationManagementClient.EncryptedVariables.List(
-                       automationAccountName, skipToken);
-                   return new ResponseWithSkipToken<AutomationManagement.Models.EncryptedVariable>(
-                       response, response.EncryptedVariables);
-               });
+            IList<AutomationManagement.Models.EncryptedVariable> encryptedVariables = AutomationManagementClient
+                .ContinuationTokenHandler(
+                    skipToken =>
+                    {
+                        var response = this.automationManagementClient.EncryptedVariables.List(
+                            automationAccountName, skipToken);
+                        return new ResponseWithSkipToken<AutomationManagement.Models.EncryptedVariable>(
+                            response, response.EncryptedVariables);
+                    });
 
-            result.AddRange(encryptedVariables.Select(variable => this.CreateVariableFromVariableModel(variable, automationAccountName)).ToList());
+            result.AddRange(
+                encryptedVariables.Select(
+                    (variable, autoamtionAccountName) =>
+                        this.CreateVariableFromVariableModel(variable, automationAccountName)).ToList());
 
             return result;
         }
-        #endregion 
+
+        #endregion
 
         #region Credentials
 
@@ -552,8 +580,10 @@ namespace Microsoft.Azure.Commands.Automation.Common
             credentialUpdateParams.Properties = new AutomationManagement.Models.CredentialUpdateProperties();
             if (description != null) credentialUpdateParams.Properties.Description = description;
 
-            Requires.Argument("userName", userName).NotNull();
-            Requires.Argument("password", password).NotNull();
+            if (string.IsNullOrEmpty(userName) || string.IsNullOrEmpty(password))
+            {
+                new AzureAutomationOperationException(string.Format(Resources.ParameterEmpty, "Username or Password"));
+            }
 
             credentialUpdateParams.Properties.UserName = userName;
             credentialUpdateParams.Properties.Password = password;
@@ -577,7 +607,8 @@ namespace Microsoft.Azure.Commands.Automation.Common
             var credential = this.automationManagementClient.PsCredentials.Get(automationAccountName, name).Credential;
             if (credential == null)
             {
-                throw new ResourceNotFoundException(typeof(Credential), string.Format(CultureInfo.CurrentCulture, Resources.CredentialNotFound, name));
+                throw new ResourceNotFoundException(typeof(Credential),
+                    string.Format(CultureInfo.CurrentCulture, Resources.RunbookNotFound, name));
             }
 
             return new Credential(automationAccountName, credential);
@@ -607,18 +638,11 @@ namespace Microsoft.Azure.Commands.Automation.Common
 
         public void DeleteCredential(string automationAccountName, string name)
         {
-            try
+            var credential = this.automationManagementClient.PsCredentials.Delete(automationAccountName, name);
+            if (credential != null && credential.StatusCode != HttpStatusCode.OK)
             {
-                var credential = this.automationManagementClient.PsCredentials.Delete(automationAccountName, name);
-            }
-            catch (CloudException cloudException)
-            {
-                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
-                {
-                    throw new ResourceNotFoundException(typeof(Schedule), string.Format(CultureInfo.CurrentCulture, Resources.CredentialNotFound, name));
-                }
-
-                throw;
+                new AzureAutomationOperationException(string.Format(Resources.AutomationOperationFailed, "Delete",
+                    "Credential", name, automationAccountName));
             }
         }
 
@@ -644,7 +668,13 @@ namespace Microsoft.Azure.Commands.Automation.Common
                     },
                 });
 
-            return this.GetModule(automationAccountName, moduleName);
+            if (createdModule == null || createdModule.StatusCode != HttpStatusCode.Created)
+            {
+                new AzureAutomationOperationException(string.Format(Resources.AutomationOperationFailed, "Create",
+                    "Module", moduleName, automationAccountName));
+            }
+
+            return new Module(automationAccountName, createdModule.Module);
         }
 
         public Module GetModule(string automationAccountName, string name)
@@ -652,7 +682,8 @@ namespace Microsoft.Azure.Commands.Automation.Common
             var module = this.automationManagementClient.Modules.Get(automationAccountName, name).Module;
             if (module == null)
             {
-                throw new ResourceNotFoundException(typeof(Module), string.Format(CultureInfo.CurrentCulture, Resources.ModuleNotFound, name));
+                throw new ResourceNotFoundException(typeof(Module),
+                    string.Format(CultureInfo.CurrentCulture, Resources.RunbookNotFound, name));
             }
 
             return new Module(automationAccountName, module);
@@ -672,7 +703,8 @@ namespace Microsoft.Azure.Commands.Automation.Common
             return modulesModels.Select(c => new Module(automationAccountName, c));
         }
 
-        public Module UpdateModule(string automationAccountName, IDictionary<string, string> tags, string name)
+        public Module UpdateModule(string automationAccountName, IDictionary<string, string> tags, string name,
+            Uri contentLink)
         {
             var existingModule = this.GetModule(automationAccountName, name);
 
@@ -680,6 +712,12 @@ namespace Microsoft.Azure.Commands.Automation.Common
             moduleUpdateParameters.Name = name;
             if (tags != null) moduleUpdateParameters.Tags = tags;
             moduleUpdateParameters.Location = existingModule.Location;
+            moduleUpdateParameters.Properties = new AutomationManagement.Models.ModuleUpdateProperties()
+            {
+                ContentLink = new AutomationManagement.Models.ContentLink()
+            };
+
+            if (contentLink != null) moduleUpdateParameters.Properties.ContentLink.Uri = contentLink;
 
             var updatedModule = this.automationManagementClient.Modules.Update(automationAccountName,
                 moduleUpdateParameters);
@@ -695,42 +733,17 @@ namespace Microsoft.Azure.Commands.Automation.Common
 
         public void DeleteModule(string automationAccountName, string name)
         {
-            try
+            var module = this.automationManagementClient.Modules.Delete(automationAccountName, name);
+            if (module != null && module.StatusCode != HttpStatusCode.OK)
             {
-                var module = this.automationManagementClient.Modules.Delete(automationAccountName, name);
-            }
-            catch (CloudException cloudException)
-            {
-                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
-                {
-                    throw new ResourceNotFoundException(typeof(Schedule), string.Format(CultureInfo.CurrentCulture, Resources.ModuleNotFound, name));
-                }
-
-                throw;
+                new AzureAutomationOperationException(string.Format(Resources.AutomationOperationFailed, "Delete",
+                    "Module", name, automationAccountName));
             }
         }
 
         #endregion
 
         #region Jobs
-        public IEnumerable<JobStream> GetJobStream(string automationAccountName, Guid jobId, DateTime? time,
-           string streamType)
-        {
-            var listParams = new AutomationManagement.Models.JobStreamListParameters();
-
-            if (time.HasValue)
-            {
-                listParams.Time = this.FormatDateTime(time.Value);
-            }
-
-            if (streamType != null)
-            {
-                listParams.StreamType = streamType;
-            }
-
-            var jobStreams = this.automationManagementClient.JobStreams.List(automationAccountName, jobId, listParams).JobStreams;
-            return jobStreams.Select(stream => this.CreateJobStreamFromJobStreamModel(stream, automationAccountName, jobId)).ToList();
-        }
 
         public Job GetJob(string automationAccountName, Guid Id)
         {
@@ -744,99 +757,32 @@ namespace Microsoft.Azure.Commands.Automation.Common
             return new Job(automationAccountName, job);
         }
 
-        public IEnumerable<Job> ListJobsByRunbookName(string automationAccountName, string runbookName, DateTime? startTime, DateTime? endTime, string jobStatus)
+        public IEnumerable<Job> ListJobsByRunbookName(string automationAccountName, string runbookName,
+            DateTime? startTime, DateTime? endTime)
         {
-            // Assume local time if DateTimeKind.Unspecified 
-            if (startTime.HasValue && startTime.Value.Kind == DateTimeKind.Unspecified)
-            {
-                startTime = DateTime.SpecifyKind(startTime.Value, DateTimeKind.Local);
-            }
-
-
-            if (endTime.HasValue && endTime.Value.Kind == DateTimeKind.Unspecified)
-            {
-                endTime = DateTime.SpecifyKind(endTime.Value, DateTimeKind.Local);
-            }
-            
             IEnumerable<AutomationManagement.Models.Job> jobModels;
-
-            if (startTime.HasValue && endTime.HasValue)
-            {
-                jobModels = AutomationManagementClient.ContinuationTokenHandler(
-                    skipToken =>
-                    {
-                        var response =
-                            this.automationManagementClient.Jobs.List(
-                                automationAccountName,
-                                new AutomationManagement.Models.JobListParameters
-                                {
-                                    StartTime = FormatDateTime(startTime.Value),
-                                    EndTime = FormatDateTime(endTime.Value),
-                                    RunbookName = runbookName,
-                                    Status = jobStatus,
-                                    SkipToken = skipToken
-                                });
-                        return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
-                    });
-            }
-            else if (startTime.HasValue)
-            {
-                jobModels = AutomationManagementClient.ContinuationTokenHandler(
-                     skipToken =>
-                     {
-                         var response =
-                              this.automationManagementClient.Jobs.List(
-                                 automationAccountName,
-                                   new AutomationManagement.Models.JobListParameters
-                                   {
-                                       StartTime = FormatDateTime(startTime.Value),
-                                       RunbookName = runbookName,
-                                       Status = jobStatus,
-                                       SkipToken = skipToken
-                                   });
-                         return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
-                     });
-            }
-            else if (endTime.HasValue)
-            {
-                jobModels = AutomationManagementClient.ContinuationTokenHandler(
-                    skipToken =>
-                    {
-                        var response =
-                            this.automationManagementClient.Jobs.List(
-                                automationAccountName,
-                                new AutomationManagement.Models.JobListParameters
-                                {
-                                    EndTime = FormatDateTime(endTime.Value),
-                                    RunbookName = runbookName,
-                                    Status = jobStatus,
-                                    SkipToken = skipToken
-                                });
-                        return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
-                    });
-            }
-            else
-            {
-                jobModels = AutomationManagementClient.ContinuationTokenHandler(
-                    skipToken =>
-                    {
-                        var response = this.automationManagementClient.Jobs.List(
+            jobModels = AutomationManagementClient.ContinuationTokenHandler(
+                skipToken =>
+                {
+                    var response =
+                        this.automationManagementClient.Jobs.List(
                             automationAccountName,
                             new AutomationManagement.Models.JobListParameters
                             {
+                                StartTime = this.FormatDateTime(startTime.Value),
+                                EndTime = this.FormatDateTime(endTime.Value),
                                 SkipToken = skipToken,
-                                Status = jobStatus,
                                 RunbookName = runbookName
                             });
-                        return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
-                    });
-            }
+                    return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
+                });
 
             return jobModels.Select(jobModel => new Job(automationAccountName, jobModel));
         }
 
-        public IEnumerable<Job> ListJobs(string automationAccountName, DateTime? startTime, DateTime? endTime, string jobStatus)
+        public IEnumerable<Job> ListJobs(string automationAccountName, DateTime? startTime, DateTime? endTime)
         {
+
             // Assume local time if DateTimeKind.Unspecified 
             if (startTime.HasValue && startTime.Value.Kind == DateTimeKind.Unspecified)
             {
@@ -861,9 +807,8 @@ namespace Microsoft.Azure.Commands.Automation.Common
                                 automationAccountName,
                                 new AutomationManagement.Models.JobListParameters
                                 {
-                                    StartTime = FormatDateTime(startTime.Value),
-                                    EndTime = FormatDateTime(endTime.Value),
-                                    Status = jobStatus,
+                                    StartTime = this.FormatDateTime(startTime.Value),
+                                    EndTime = this.FormatDateTime(endTime.Value),
                                     SkipToken = skipToken
                                 });
                         return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
@@ -872,19 +817,18 @@ namespace Microsoft.Azure.Commands.Automation.Common
             else if (startTime.HasValue)
             {
                 jobModels = AutomationManagementClient.ContinuationTokenHandler(
-                     skipToken =>
-                     {
-                         var response =
-                              this.automationManagementClient.Jobs.List(
-                                 automationAccountName,
-                                   new AutomationManagement.Models.JobListParameters
-                                   {
-                                       StartTime = FormatDateTime(startTime.Value),
-                                       Status = jobStatus,
-                                       SkipToken = skipToken
-                                   });
-                         return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
-                     });
+                    skipToken =>
+                    {
+                        var response =
+                            this.automationManagementClient.Jobs.List(
+                                automationAccountName,
+                                new AutomationManagement.Models.JobListParameters
+                                {
+                                    StartTime = this.FormatDateTime(startTime.Value),
+                                    SkipToken = skipToken
+                                });
+                        return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
+                    });
             }
             else if (endTime.HasValue)
             {
@@ -896,8 +840,7 @@ namespace Microsoft.Azure.Commands.Automation.Common
                                 automationAccountName,
                                 new AutomationManagement.Models.JobListParameters
                                 {
-                                    EndTime = FormatDateTime(endTime.Value),
-                                    Status = jobStatus,
+                                    EndTime = this.FormatDateTime(endTime.Value),
                                     SkipToken = skipToken
                                 });
                         return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
@@ -910,7 +853,7 @@ namespace Microsoft.Azure.Commands.Automation.Common
                     {
                         var response = this.automationManagementClient.Jobs.List(
                             automationAccountName,
-                            new AutomationManagement.Models.JobListParameters { Status = jobStatus, SkipToken = skipToken, });
+                            new AutomationManagement.Models.JobListParameters { SkipToken = skipToken, });
                         return new ResponseWithSkipToken<AutomationManagement.Models.Job>(response, response.Jobs);
                     });
             }
@@ -935,158 +878,30 @@ namespace Microsoft.Azure.Commands.Automation.Common
 
         #endregion
 
-        #region JobSchedules
-
-        public JobSchedule GetJobSchedule(string automationAccountName, Guid jobScheduleId)
-        {
-            AutomationManagement.Models.JobSchedule jobScheduleModel = null;
-
-            try
-            {
-                jobScheduleModel = this.automationManagementClient.JobSchedules.Get(
-                    automationAccountName,
-                    jobScheduleId)
-                    .JobSchedule;
-            }
-            catch (CloudException cloudException)
-            {
-                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
-                {
-                    throw new ResourceNotFoundException(typeof(JobSchedule),
-                        string.Format(CultureInfo.CurrentCulture, Resources.JobScheduleWithIdNotFound, jobScheduleId));
-                }
-
-                throw;
-            }
- 
-            return this.CreateJobScheduleFromJobScheduleModel(automationAccountName, jobScheduleModel);
-        }
-
-        public JobSchedule GetJobSchedule(string automationAccountName, string runbookName, string scheduleName)
-        {
-            var jobSchedules = this.ListJobSchedules(automationAccountName);
-            JobSchedule jobSchedule = null;
-            bool jobScheduleFound = false;
-
-            foreach (var js in jobSchedules)
-            {
-                if (String.Equals(js.RunbookName, runbookName, StringComparison.OrdinalIgnoreCase) && 
-                    String.Equals(js.ScheduleName, scheduleName, StringComparison.OrdinalIgnoreCase))
-                {
-                    jobSchedule = this.GetJobSchedule(automationAccountName, new Guid(js.Id));
-                    jobScheduleFound = true;
-                    break;
-                }
-            }
-            if (!jobScheduleFound)
-            {
-                throw new ResourceNotFoundException(typeof(Schedule),
-                        string.Format(CultureInfo.CurrentCulture, Resources.JobScheduleNotFound, runbookName, scheduleName));
-            }
-
-            return jobSchedule;
-        }
-
-        public IEnumerable<JobSchedule> ListJobSchedules(string automationAccountName)
-        {
-            IList<AutomationManagement.Models.JobSchedule> jobScheduleModels = AutomationManagementClient
-                .ContinuationTokenHandler(
-                    skipToken =>
-                    {
-                        var response = this.automationManagementClient.JobSchedules.List(
-                            automationAccountName, skipToken);
-
-                        return new ResponseWithSkipToken<AutomationManagement.Models.JobSchedule>(
-                            response, response.JobSchedules);
-                    });
-
-            return jobScheduleModels.Select(jobScheduleModel => new JobSchedule(automationAccountName, jobScheduleModel));
-        }
-
-        public IEnumerable<JobSchedule> ListJobSchedulesByRunbookName(string automationAccountName, string runbookName)
-        {
-            var jobSchedules = this.ListJobSchedules(automationAccountName);
-
-            IEnumerable<JobSchedule> jobSchedulesOfRunbook = new List<JobSchedule>();
-
-            jobSchedulesOfRunbook = jobSchedules.Where(js => String.Equals(js.RunbookName, runbookName, StringComparison.OrdinalIgnoreCase));
-
-            return jobSchedulesOfRunbook;
-        }
-
-        public IEnumerable<JobSchedule> ListJobSchedulesByScheduleName(string automationAccountName, string scheduleName)
-        {
-            var jobSchedules = this.ListJobSchedules(automationAccountName);
-
-            IEnumerable<JobSchedule> jobSchedulesOfSchedule = new List<JobSchedule>();
-
-            jobSchedulesOfSchedule = jobSchedules.Where(js => String.Equals(js.ScheduleName, scheduleName, StringComparison.OrdinalIgnoreCase));
-
-            return jobSchedulesOfSchedule;
-        }
-
-        public JobSchedule RegisterScheduledRunbook(string automationAccountName, string runbookName, string scheduleName, IDictionary parameters)
-        {
-            var processedParameters = this.ProcessRunbookParameters(automationAccountName, runbookName, parameters);
-            var sdkJobSchedule = this.automationManagementClient.JobSchedules.Create(
-                automationAccountName,
-                new AutomationManagement.Models.JobScheduleCreateParameters
-                {
-                    Properties = new AutomationManagement.Models.JobScheduleCreateProperties
-                    {
-                        Schedule = new ScheduleAssociationProperty { Name = scheduleName },
-                        Runbook = new RunbookAssociationProperty { Name = runbookName },
-                        Parameters = processedParameters
-                    }
-                }).JobSchedule;
-
-            return new JobSchedule(automationAccountName, sdkJobSchedule);
-        }
-
-        public void UnregisterScheduledRunbook(string automationAccountName, Guid jobScheduleId)
-        {
-            try
-            {
-                this.automationManagementClient.JobSchedules.Delete(
-                    automationAccountName,
-                    jobScheduleId);
-            }
-            catch (CloudException cloudException)
-            {
-                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
-                {
-                    throw new ResourceNotFoundException(typeof(Schedule),
-                        string.Format(CultureInfo.CurrentCulture, Resources.JobScheduleWithIdNotFound, jobScheduleId));
-                }
-
-                throw;
-            }
-        }
-
-        public void UnregisterScheduledRunbook(string automationAccountName, string runbookName, string scheduleName)
-        {
-            var jobSchedules = this.ListJobSchedules(automationAccountName);
-            bool jobScheduleFound = false;
-
-            foreach (var jobSchedule in jobSchedules)
-            {
-                if (jobSchedule.RunbookName == runbookName && jobSchedule.ScheduleName == scheduleName)
-                {
-                    this.UnregisterScheduledRunbook(automationAccountName, new Guid(jobSchedule.Id));
-                    jobScheduleFound = true;
-                    break;
-                }
-            }
-            if(!jobScheduleFound)
-            {
-                throw new ResourceNotFoundException(typeof(Schedule),
-                        string.Format(CultureInfo.CurrentCulture, Resources.JobScheduleNotFound, runbookName, scheduleName));
-            }
-        }
-
-        #endregion
-
         #region Private Methods
+
+        private JobStream CreateJobStreamFromJobStreamModel(AutomationManagement.Models.JobStream jobStream)
+        {
+            Requires.Argument("jobStream", jobStream).NotNull();
+            return new JobStream(jobStream);
+        }
+
+        private Variable CreateVariableFromVariableModel(AutomationManagement.Models.Variable variable,
+            string automationAccountName)
+        {
+            Requires.Argument("variable", variable).NotNull();
+
+            return new Variable(variable, automationAccountName);
+        }
+
+        private Variable CreateVariableFromVariableModel(AutomationManagement.Models.EncryptedVariable variable,
+            string automationAccountName)
+        {
+            Requires.Argument("variable", variable).NotNull();
+
+            return new Variable(variable, automationAccountName);
+        }
+
 
         private Schedule CreateScheduleFromScheduleModel(string automationAccountName, AutomationManagement.Models.Schedule schedule)
         {
@@ -1095,11 +910,29 @@ namespace Microsoft.Azure.Commands.Automation.Common
             return new Schedule(automationAccountName, schedule);
         }
 
-        private JobSchedule CreateJobScheduleFromJobScheduleModel(string automationAccountName, AutomationManagement.Models.JobSchedule jobSchedule)
+        private AutomationManagement.Models.Schedule GetScheduleModel(string automationAccountName, string scheduleName)
         {
-            Requires.Argument("jobSchedule", jobSchedule).NotNull();
+            AutomationManagement.Models.Schedule scheduleModel;
 
-            return new JobSchedule(automationAccountName, jobSchedule);
+            try
+            {
+                scheduleModel = this.automationManagementClient.Schedules.Get(
+                    automationAccountName,
+                    scheduleName)
+                    .Schedule;
+            }
+            catch (CloudException cloudException)
+            {
+                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    throw new ResourceNotFoundException(typeof(Schedule),
+                        string.Format(CultureInfo.CurrentCulture, Resources.ScheduleNotFound, scheduleName));
+                }
+
+                throw;
+            }
+
+            return scheduleModel;
         }
 
         private Management.Automation.Models.Runbook TryGetRunbookModel(string automationAccountName, string runbookName)
@@ -1121,110 +954,6 @@ namespace Microsoft.Azure.Commands.Automation.Common
                 }
             }
             return runbook;
-        }
-
-        private IDictionary<string, RunbookParameter> ListRunbookParameters(string automationAccountName, string runbookName)
-        {
-            Runbook runbook = this.GetRunbook(automationAccountName, runbookName);
-            if (0 == String.Compare(runbook.State, RunbookState.New, CultureInfo.InvariantCulture,
-                     CompareOptions.IgnoreCase))
-            {
-                throw new InvalidOperationException(string.Format(CultureInfo.CurrentCulture, Resources.RunbookHasNoPublishedVersion, runbookName));
-            }
-            return runbook.Parameters;
-        }
-
-        private IDictionary<string, string> ProcessRunbookParameters(string automationAccountName, string runbookName, IDictionary parameters)
-        {
-            parameters = parameters ?? new Dictionary<string, string>();
-            IDictionary<string, RunbookParameter> runbookParameters = this.ListRunbookParameters(automationAccountName, runbookName);
-            var filteredParameters = new Dictionary<string, string>();
-
-            foreach (var runbookParameter in runbookParameters)
-            {
-                if (parameters.Contains(runbookParameter.Key))
-                {
-                    object paramValue = parameters[runbookParameter.Key];
-                    try
-                    {
-                        filteredParameters.Add(runbookParameter.Key, JsonConvert.SerializeObject(paramValue, new JsonSerializerSettings() { DateFormatHandling = DateFormatHandling.MicrosoftDateFormat }));
-                    }
-                    catch (JsonSerializationException)
-                    {
-                        throw new ArgumentException(
-                        string.Format(
-                            CultureInfo.CurrentCulture, Resources.RunbookParameterCannotBeSerializedToJson, runbookParameter.Key));
-                    }
-                }
-                else if (runbookParameter.Value.IsMandatory)
-                {
-                    throw new ArgumentException(
-                        string.Format(
-                            CultureInfo.CurrentCulture, Resources.RunbookParameterValueRequired, runbookParameter.Key));
-                }
-            }
-
-            if (filteredParameters.Count != parameters.Count)
-            {
-                throw new ArgumentException(
-                    string.Format(CultureInfo.CurrentCulture, Resources.InvalidRunbookParameters));
-            }
-
-            var hasJobStartedBy = filteredParameters.Any(filteredParameter => filteredParameter.Key == Constants.JobStartedByParameterName);
-
-            if (!hasJobStartedBy)
-            {
-                filteredParameters.Add(Constants.JobStartedByParameterName, Constants.ClientIdentity);
-            }
-
-            return filteredParameters;
-        }
-
-        private JobStream CreateJobStreamFromJobStreamModel(AutomationManagement.Models.JobStream jobStream, string automationAccountName, Guid jobId)
-        {
-            Requires.Argument("jobStream", jobStream).NotNull();
-            Requires.Argument("automationAccountName", automationAccountName).NotNull();
-            Requires.Argument("jobId", jobId).NotNull();
-            return new JobStream(jobStream, automationAccountName, jobId);
-        }
-
-        private Variable CreateVariableFromVariableModel(AutomationManagement.Models.Variable variable, string automationAccountName)
-        {
-            Requires.Argument("variable", variable).NotNull();
-
-            return new Variable(variable, automationAccountName);
-        }
-
-        private Variable CreateVariableFromVariableModel(AutomationManagement.Models.EncryptedVariable variable, string automationAccountName)
-        {
-            Requires.Argument("variable", variable).NotNull();
-
-            return new Variable(variable, automationAccountName);
-        }
-
-
-        private AutomationManagement.Models.Schedule GetScheduleModel(string automationAccountName, string scheduleName)
-        {
-            AutomationManagement.Models.Schedule scheduleModel;
-
-            try
-            {
-                scheduleModel = this.automationManagementClient.Schedules.Get(
-                    automationAccountName,
-                    scheduleName)
-                    .Schedule;
-            }
-            catch (CloudException cloudException)
-            {
-                if (cloudException.Response.StatusCode == HttpStatusCode.NotFound)
-                {
-                    throw new ResourceNotFoundException(typeof(Schedule), string.Format(CultureInfo.CurrentCulture, Resources.ScheduleNotFound, scheduleName));
-                }
-
-                throw;
-            }
-
-            return scheduleModel;
         }
 
         private string FormatDateTime(DateTime dateTime)
@@ -1263,6 +992,53 @@ namespace Microsoft.Azure.Commands.Automation.Common
             return this.GetSchedule(automationAccountName, schedule.Name);
         }
 
+        private IDictionary<string, string> ProcessRunbookParameters(string automationAccountName, string runbookName, IDictionary parameters)
+        {
+            parameters = parameters ?? new Dictionary<string, string>();
+            var runbook = this.GetRunbook(automationAccountName, runbookName);
+            var filteredParameters = new Dictionary<string, string>();
+
+            foreach (var runbookParameter in runbook.Parameters)
+            {
+                if (parameters.Contains(runbookParameter.Key))
+                {
+                    object paramValue = parameters[runbookParameter.Key];
+                    try
+                    {
+                        filteredParameters.Add(runbookParameter.Key,
+                            JsonConvert.SerializeObject(paramValue,
+                                new JsonSerializerSettings()
+                                {
+                                    DateFormatHandling = DateFormatHandling.MicrosoftDateFormat
+                                }));
+                    }
+                    catch (JsonSerializationException)
+                    {
+                        throw new ArgumentException(string.Format(CultureInfo.CurrentCulture, Resources.RunbookParameterCannotBeSerializedToJson, runbookParameter.Key));
+                    }
+                }
+                else if (runbookParameter.Value.IsMandatory)
+                {
+                    throw new ArgumentException(string.Format(CultureInfo.CurrentCulture, Resources.RunbookParameterValueRequired, runbookParameter.Key));
+                }
+            }
+
+            if (filteredParameters.Count != parameters.Count)
+            {
+                throw new ArgumentException(string.Format(CultureInfo.CurrentCulture, Resources.InvalidRunbookParameters));
+            }
+
+            var hasJobStartedBy = filteredParameters.Any(filteredParameter => filteredParameter.Key == Constants.JobStartedByParameterName);
+
+            if (!hasJobStartedBy)
+            {
+                filteredParameters.Add(Constants.JobStartedByParameterName, Constants.ClientIdentity);
+            }
+
+            return filteredParameters;
+        }
+
         #endregion
+
     }
 }

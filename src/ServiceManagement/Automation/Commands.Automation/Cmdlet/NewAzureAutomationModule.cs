@@ -31,15 +31,14 @@ namespace Microsoft.Azure.Commands.Automation.Cmdlet
         /// <summary>
         /// Gets or sets the module name.
         /// </summary>
-        [Parameter(Position = 1, Mandatory = true, ValueFromPipelineByPropertyName = true,
+        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true,
             HelpMessage = "The module name.")]
-        [ValidateNotNullOrEmpty]
         public string Name { get; set; }
 
         /// <summary>
         /// Gets or sets the contentLink
         /// </summary>
-        [Parameter(Position = 2, Mandatory = true, ValueFromPipelineByPropertyName = true,
+        [Parameter(Position = 1, Mandatory = true, ValueFromPipelineByPropertyName = true,
             HelpMessage = "The ContentLink.")]
         [ValidateNotNullOrEmpty]
         public Uri ContentLink { get; set; }
