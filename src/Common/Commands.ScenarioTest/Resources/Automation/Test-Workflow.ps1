@@ -1,5 +1,11 @@
-Workflow Test-Workflow {  
-    get-date
-    start-sleep -s 40
-    get-date
+workflow Test-Workflow
+{
+                "Running"
+                
+                for ($i=0; $i -lt 201; $i++)
+                {
+                                "iter $i"
+                }
+                
+                "Done"
 }
